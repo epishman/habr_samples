@@ -7,7 +7,7 @@ use serde_json::Value;
 
 const FILE_BUF_SIZE: usize = 65535;
 const CHANNEL_BUF_SIZE: usize = 1000;
-const THREAD_SLEEP: std::time::Duration = std::time::Duration::from_nanos(100);
+const THREAD_SLEEP: std::time::Duration = std::time::Duration::from_nanos(10);
 const PRN_COUNT: usize = 100000;
 const PRN_LINE: &str = "--------------------------------------------------\n";
 
@@ -92,7 +92,7 @@ fn main() {
             fnames.push(arg);
         }
     }
-    if tcount > 0 && syncasync == 0 {
+    if fnames.len() == 0 || tcount > 0 && syncasync == 0 {
         println!("{}USAGE: jsonparse \"<file name>\" \"<file name>\"... -t <n> sync|async ...
         -t <n> - thread count, 0 means a single-threaded model
         sync - synchronize the threads and minimize memory usage

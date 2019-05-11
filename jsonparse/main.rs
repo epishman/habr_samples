@@ -7,9 +7,9 @@ use serde_json::Value;
 
 const FILE_BUF_SIZE: usize = 65535;
 const CHANNEL_BUF_SIZE: usize = 1000;
-const THREAD_SLEEP: std::time::Duration = std::time::Duration::from_nanos(10);
+const THREAD_SLEEP: std::time::Duration = std::time::Duration::from_nanos(100);
 const PRN_COUNT: usize = 100000;
-const PRN_LINE: &str = "--------------------------------------------------\n";
+const PRN_LINE: &str = "---------------------------------------------------\n";
 
 //source data
 #[derive(Default)]
@@ -83,6 +83,7 @@ fn main() {
             }
         }
         else if t == 2 {
+            t = 3;
             syncasync = match arg.as_str() {
                 "sync" => 1,
                 "async" => 2,
@@ -132,9 +133,10 @@ fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors {
         }
     };
 
+    //start threads
     let mut channels: Vec<SyncAsyncSender<Vec<u8>>> = vec![];
     let mut threads = vec![];
-    for tid in 0..tcount { //start all threads
+    for tid in 0..tcount {
         let (send, recv) = SyncAsyncSender::new(syncasync);
         channels.push(send);
         threads.push(std::thread::spawn(move || process_thread(recv, tid)));
@@ -207,9 +209,8 @@ fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors {
                             }
                         } else {
                             loop {
-                                let ok = channels[tid].try_send(o.to_vec());
                                 tid = if tid < tcount-1 {tid+1} else {0};
-                                if ok {
+                                if channels[tid].try_send(o.to_vec()) {
                                     break;
                                 } else {
                                     std::thread::sleep(THREAD_SLEEP);
@@ -229,12 +230,14 @@ fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors {
     }
     allcou0 += prncou;
 
-    for tid in 0..tcount { //stop all threads
+    //stop threads
+    for tid in 0..tcount {
         while !channels[tid].try_send(vec![]) {
             std::thread::sleep(THREAD_SLEEP);
         }
     }
 
+    // join threads
     for _ in 0..tcount {
         let (resultpart, allcou, errcou) = threads.pop().unwrap().join().unwrap();
         if result.all.len() == 0 {

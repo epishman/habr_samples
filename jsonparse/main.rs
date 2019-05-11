@@ -213,7 +213,7 @@ fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors {
                         else {
                             loop {
                                 tid = if tid < tcount-1 {tid+1} else {0};
-                                if channels[tid].try_send(o.to_vec()) {
+                                if channels[tid].try_send(o.to_owned()) {
                                     break;
                                 } else {
                                     std::thread::sleep(THREAD_SLEEP);

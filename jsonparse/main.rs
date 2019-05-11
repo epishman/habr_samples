@@ -70,8 +70,7 @@ fn main() {
     let mut fnames = vec![];
 
     let args: Vec<String> = std::env::args().collect();
-    for i in 1..args.len() {
-        let arg = &args[i];
+    for arg in &args[1..] {
         if arg == "-t" {
             t = 1;
         }

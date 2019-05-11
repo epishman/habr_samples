@@ -2,19 +2,21 @@
 //serde_json = "1.0"
 
 use std::collections::{HashMap, HashSet};
+use std::process::exit;
 use serde_json::Value;
 
-const FILE_BUFFER_SIZE: usize = 100000;
-const CHANNEL_BUFFER_SIZE: usize = 1000;
-const PRN_COUNT: i32 = 100000;
-const PRN_LINE: &str = "------------------------------------------------------------------\n";
+const FILE_BUF_SIZE: usize = 65535;
+const CHANNEL_BUF_SIZE: usize = 1000;
+const THREAD_SLEEP: std::time::Duration = std::time::Duration::from_nanos(100);
+const PRN_COUNT: usize = 100000;
+const PRN_LINE: &str = "--------------------------------------------------\n";
 
 //source data
 #[derive(Default)]
 struct DebtRec {
     company: String,
     phones: Vec<String>,
-    debt: f64
+    debt: f64,
 }
 
 //result data
@@ -22,47 +24,88 @@ struct DebtRec {
 struct Debtor {
     companies: HashSet<String>,
     phones: HashSet<String>,
-    debt: f64
+    debt: f64,
 }
-
 #[derive(Default)]
 struct Debtors {
     all: Vec<Debtor>,
-    index_by_phone: HashMap<String, usize>
+    index_by_phone: HashMap<String, usize>,
+}
+
+//for universal multithreading
+enum SyncAsyncSender<T> {
+    Sync(std::sync::mpsc::SyncSender<T>),
+    Async(std::sync::mpsc::Sender<T>),
+}
+impl<T> SyncAsyncSender<T> {
+    fn new(syncasync: usize) -> (SyncAsyncSender<T>, std::sync::mpsc::Receiver<T>) {
+        match syncasync {
+            1 => {
+                let (send, recv) = std::sync::mpsc::sync_channel(CHANNEL_BUF_SIZE);
+                (SyncAsyncSender::Sync(send), recv)
+            }
+            2 => {
+                let (send, recv) = std::sync::mpsc::channel();
+                (SyncAsyncSender::Async(send), recv)
+            }
+            _ => panic!("ERROR: sync|async must be 1 or 2 !"),
+        }
+    }
+
+    fn try_send(&self, data: T) -> bool {
+        match &self {
+            SyncAsyncSender::Sync(chan) => chan.try_send(data).is_ok(),
+            SyncAsyncSender::Async(chan) => chan.send(data).is_ok(),
+        }
+    }
 }
 
 
 fn main() {
     let mut result = Debtors::default();
 
-    let mut threadcount = -1;
-    let mut fflag = 0;
-    for arg in std::env::args() {
+    let mut t = 0;
+    let mut tcount = 0;
+    let mut syncasync = 0;
+    let mut fnames = vec![];
+
+    let args: Vec<String> = std::env::args().collect();
+    for i in 1..args.len() {
+        let arg = &args[i];
         if arg == "-t" {
-            threadcount = 0;
+            t = 1;
         }
-        else if threadcount == 0 {
-            threadcount = match arg.parse() {
+        else if t == 1 {
+            t = 2;
+            tcount = match arg.parse() {
                 Ok(n) => n,
-                Err(_) => {
-                    println!("ERROR: -t \"{}\" - must be an integer !", arg);
-                    break;
-                }
+                Err(_) => 0
             }
         }
-        else if threadcount > 0 {
-            if arg == "-f" {
-                fflag = 1;
+        else if t == 2 {
+            syncasync = match arg.as_str() {
+                "sync" => 1,
+                "async" => 2,
+                _ => 0
             }
-            else if fflag == 1 {
-                fflag = 2;
-                let resultpart = process_file(&arg, threadcount as usize);
-                if result.all.len() == 0 {
-                    result = resultpart;
-                } else {
-                    merge_result(resultpart, &mut result);
-                }
-            }
+        } else {
+            fnames.push(arg);
+        }
+    }
+    if tcount > 0 && syncasync == 0 {
+        println!("{}USAGE: jsonparse \"<file name>\" \"<file name>\"... -t <n> sync|async ...
+        -t <n> - thread count, 0 means a single-threaded model
+        sync - synchronize the threads and minimize memory usage
+        async - do not synchronize the threads and unlimited memory usage", PRN_LINE);
+        exit(-1);
+    }
+
+    for f in fnames {
+        let resultpart = process_file(&f, tcount, syncasync);
+        if result.all.len() == 0 {
+            result = resultpart;
+        } else {
+            merge_result(resultpart, &mut result);
         }
     }
 
@@ -70,15 +113,13 @@ fn main() {
         println!("{}#{}: debt: {}", PRN_LINE, di, &d.debt);
         println!("companies: {:?}\nphones: {:?}", &d.companies, &d.phones);
     }
-
-    if threadcount <= 0 || fflag < 2 {
-        println!("USAGE: fastpivot -t <thread count> -f \"file name\" -f \"file name\" ...");
-    }
 } 
 
 
-fn process_file(fname: &str, threadcount: usize) -> Debtors { 
+fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors { 
     use std::io::prelude::*;
+
+    let mut result = Debtors::default();
 
     println!("{}file {}:", PRN_LINE, fname);
     let tbegin = std::time::SystemTime::now();
@@ -86,12 +127,21 @@ fn process_file(fname: &str, threadcount: usize) -> Debtors {
     let mut file = match std::fs::File::open(fname) {
         Ok(f) => f,
         Err(e) => {
-            println!("ERROR: {}", e);
-            return Debtors::default();
+            println!("FILE OPEN ERROR: {}", e);
+            return result;
         }
     };
 
-    let mut buf = [0; FILE_BUFFER_SIZE];
+    let mut channels: Vec<SyncAsyncSender<Vec<u8>>> = vec![];
+    let mut threads = vec![];
+    for tid in 0..tcount { //start all threads
+        let (send, recv) = SyncAsyncSender::new(syncasync);
+        channels.push(send);
+        threads.push(std::thread::spawn(move || process_thread(recv, tid)));
+    }
+    let mut tid = 0;
+
+    let mut buf = [0; FILE_BUF_SIZE];
     let mut i0 = 0;
     let mut osave:Vec<u8> = vec![];
 
@@ -99,15 +149,9 @@ fn process_file(fname: &str, threadcount: usize) -> Debtors {
     let mut quotes = false;
     let mut backslash = false;
 
-    let mut threads = vec![];
-    let mut channels = vec![];
-    for tid in 0..threadcount { //start all threads
-        // let (send, recv) = std::sync::mpsc::channel();
-        let (send, recv) = std::sync::mpsc::sync_channel(CHANNEL_BUFFER_SIZE);
-        threads.push(std::thread::spawn(move || process_thread(recv, tid)));
-        channels.push(send);
-    }
-    let mut tid = 0;
+    let mut allcou0 = 0;
+    let mut errcou0 = 0;
+    let mut prncou = 0;
 
     loop {
         let blen = match file.read(&mut buf) {
@@ -115,7 +159,8 @@ fn process_file(fname: &str, threadcount: usize) -> Debtors {
             Ok(0) => break,
             Ok(blen) => blen,
             Err(e) => {
-                panic!(e);
+                println!("FILE READ ERROR: {}", e);
+                return result;
             }
         };
         for i in 0..blen {
@@ -144,14 +189,34 @@ fn process_file(fname: &str, threadcount: usize) -> Debtors {
                             o = &osave;
                         }
 
-                        // channels[tid].send(o.to_vec()).unwrap();
-                        // tid = if tid == threadcount-1 {0} else {tid+1};
-                        loop {
-                            tid = if tid == threadcount-1 {0} else {tid+1};
-                            if channels[tid].try_send(o.to_vec()).is_ok() {
-                                break; 
+                        if tcount == 0 {
+                            match serde_json::from_slice(o) {
+                                Ok(o) => {
+                                    process_object(&o, &mut result);
+                                } Err(e) => {
+                                    println!("JSON OR UTF8 ERROR: {}", e);
+                                    errcou0 += 1;
+                                }
+                            }
+                            if prncou < PRN_COUNT {
+                                prncou += 1;
+                            } else {
+                                allcou0 += prncou;
+                                prncou = 1;
+                                println!("{}", allcou0);
+                            }
+                        } else {
+                            loop {
+                                let ok = channels[tid].try_send(o.to_vec());
+                                tid = if tid < tcount-1 {tid+1} else {0};
+                                if ok {
+                                    break;
+                                } else {
+                                    std::thread::sleep(THREAD_SLEEP);
+                                }
                             }
                         }
+
                         osave.clear();
                     }
                 }
@@ -162,45 +227,49 @@ fn process_file(fname: &str, threadcount: usize) -> Debtors {
             i0 = 0;
         }
     }
+    allcou0 += prncou;
 
-    for tid in 0..threadcount { //stop all threads
-        channels[tid].send(vec![]).unwrap();
+    for tid in 0..tcount { //stop all threads
+        while !channels[tid].try_send(vec![]) {
+            std::thread::sleep(THREAD_SLEEP);
+        }
     }
 
-    let mut result = Debtors::default();
-    let mut allcount0 = 0;
-    let mut errcount0 = 0;
-
-    for _ in 0..threadcount {
-        let (resultpart, allcount, errcount) = threads.pop().unwrap().join().unwrap();
+    for _ in 0..tcount {
+        let (resultpart, allcou, errcou) = threads.pop().unwrap().join().unwrap();
         if result.all.len() == 0 {
             result = resultpart;
-        } 
-        else {
+        } else {
             merge_result(resultpart, &mut result);
         }
-        allcount0 += allcount;
-        errcount0 += errcount;
+        allcou0 += allcou;
+        errcou0 += errcou;
     }
 
     println!("file {}: processed {} objects in {:?}s, {} errors", 
-        fname, allcount0, tbegin.elapsed().unwrap(), errcount0
+        fname, allcou0, tbegin.elapsed().unwrap(), errcou0
     );
 
     result
 }
 
 
-fn process_thread(channel: std::sync::mpsc::Receiver<Vec<u8>>, tid: usize) -> (Debtors, i32, i32) {
+fn process_thread(chan: std::sync::mpsc::Receiver<Vec<u8>>, tid: usize) -> (Debtors, usize, usize) {
     let mut result = Debtors::default();
-    let mut allcount = 0;
-    let mut errcount = 0;
-    let mut prncount = 0;
+    let mut allcou = 0;
+    let mut errcou = 0;
+    let mut prncou = 0;
     let mut prntab = String::new();
     for _ in 0..(tid)*2 {prntab.push('\t')}
 
     loop {
-        let o = channel.recv().unwrap();
+        let o = match chan.recv() {
+            Ok(o) => o,
+            Err(e) => {
+                println!("THREAD ERROR: {}", e);
+                panic!();
+            }
+        };
         if o.len() == 0 {
             break;
         }
@@ -209,19 +278,20 @@ fn process_thread(channel: std::sync::mpsc::Receiver<Vec<u8>>, tid: usize) -> (D
                 process_object(&o, &mut result);
             }
             Err(e) => {
-                println!("JSON ERROR: {}:\n{:?}", e, std::str::from_utf8(&o));
-                errcount +=1;
+                println!("JSON OR UTF8 ERROR: {}", e);
+                errcou += 1;
             }
         }
-        prncount += 1;
-        if prncount == PRN_COUNT {
-            allcount += prncount;
-            prncount = 0;
-            println!("{}#{}: {}", prntab, tid, allcount);
+        if prncou < PRN_COUNT {
+            prncou += 1;
+        } else {
+            allcou += prncou;
+            prncou = 1;
+            println!("{}#{}: {}", prntab, tid, allcou);
         }
     }
-    allcount += prncount;
-    (result, allcount, errcount)
+    allcou += prncou;
+    (result, allcou, errcou)
 }
 
 

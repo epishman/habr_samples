@@ -151,8 +151,8 @@ fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors {
     let mut quotes = false;
     let mut backslash = false;
 
-    let mut allcou0 = 0;
-    let mut errcou0 = 0;
+    let mut allcou = 0;
+    let mut errcou = 0;
     let mut prncou = 0;
 
     loop {
@@ -191,23 +191,26 @@ fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors {
                             o = &osave;
                         }
 
+                        // single thread
                         if tcount == 0 {
                             match serde_json::from_slice(o) {
                                 Ok(o) => {
                                     process_object(&o, &mut result);
                                 } Err(e) => {
                                     println!("JSON OR UTF8 ERROR: {}", e);
-                                    errcou0 += 1;
+                                    errcou += 1;
                                 }
                             }
                             if prncou < PRN_COUNT {
                                 prncou += 1;
                             } else {
-                                allcou0 += prncou;
+                                allcou += prncou;
                                 prncou = 1;
-                                println!("{}", allcou0);
+                                println!("{}", allcou);
                             }
-                        } else {
+                        } 
+                        // multithreading
+                        else {
                             loop {
                                 tid = if tid < tcount-1 {tid+1} else {0};
                                 if channels[tid].try_send(o.to_vec()) {
@@ -228,7 +231,7 @@ fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors {
             i0 = 0;
         }
     }
-    allcou0 += prncou;
+    allcou += prncou;
 
     //stop threads
     for tid in 0..tcount {
@@ -239,18 +242,18 @@ fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors {
 
     // join threads
     for _ in 0..tcount {
-        let (resultpart, allcou, errcou) = threads.pop().unwrap().join().unwrap();
+        let (resultpart, allcoupart, errcoupart) = threads.pop().unwrap().join().unwrap();
         if result.all.len() == 0 {
             result = resultpart;
         } else {
             merge_result(resultpart, &mut result);
         }
-        allcou0 += allcou;
-        errcou0 += errcou;
+        allcou += allcoupart;
+        errcou += errcoupart;
     }
 
     println!("file {}: processed {} objects in {:?}s, {} errors", 
-        fname, allcou0, tbegin.elapsed().unwrap(), errcou0
+        fname, allcou, tbegin.elapsed().unwrap(), errcou
     );
 
     result

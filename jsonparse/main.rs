@@ -153,6 +153,7 @@ fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors {
     let mut allcou = 0;
     let mut errcou = 0;
     let mut prncou = 0;
+    let mut waitcou = 0;
 
     loop {
         let blen = match file.read(&mut buf) {
@@ -215,6 +216,7 @@ fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors {
                                 if channels[tid].try_send(o.to_owned()) {
                                     break;
                                 } else {
+                                    waitcou += 1;
                                     std::thread::sleep(THREAD_SLEEP);
                                 }
                             }
@@ -235,6 +237,7 @@ fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors {
     //stop threads
     for tid in 0..tcount {
         while !channels[tid].try_send(vec![]) {
+            waitcou += 1;
             std::thread::sleep(THREAD_SLEEP);
         }
     }
@@ -251,8 +254,8 @@ fn process_file(fname: &str, tcount: usize, syncasync: usize) -> Debtors {
         errcou += errcoupart;
     }
 
-    println!("file {}: processed {} objects in {:?}s, {} errors", 
-        fname, allcou, tbegin.elapsed().unwrap(), errcou
+    println!("file {}: processed {} objects in {:?}s, {} errors, {} waits, {:?} waittime", 
+        fname, allcou, tbegin.elapsed().unwrap(), errcou, waitcou, THREAD_SLEEP * waitcou 
     );
 
     result

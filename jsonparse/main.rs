@@ -6,8 +6,8 @@ use std::process::exit;
 use serde_json::Value;
 
 const FILE_BUF_SIZE: usize = 65535;
-const CHANNEL_BUF_SIZE: usize = 1000;
-const THREAD_SLEEP: std::time::Duration = std::time::Duration::from_nanos(100);
+const CHANNEL_BUF_SIZE: usize = 10000;
+const THREAD_SLEEP: std::time::Duration = std::time::Duration::from_nanos(1000);
 const PRN_COUNT: usize = 100000;
 const PRN_LINE: &str = "---------------------------------------------------\n";
 

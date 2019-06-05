@@ -12,6 +12,7 @@ use std::{
     ops::{Generator, GeneratorState},
     pin::Pin,
     cell::RefCell,
+    rc::Rc,
 };
 
 const URL: &str = "127.0.0.1:8080";
@@ -37,7 +38,7 @@ const HTML: &str = r#"
     </html>
 "#;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct UserData {
     sid: String,
     msg_in: String,
@@ -45,19 +46,41 @@ struct UserData {
     script: String,
 }
 
+type UserDataCell = Rc<RefCell<UserData>>;
+
 struct UserSession {
-    udata_cell: RefCell<UserData>,
-    scenario: Pin<Box<dyn Generator<Yield = String, Return = String>>>,
+    udata: UserDataCell,
+    scenario: Pin<Box<dyn Generator<Yield = (), Return = ()>>>,
 }
 
 type UserSessions = HashMap<String, UserSession>;
 
+fn create_user_scenario(udata: UserDataCell) -> impl Generator<Yield = (), Return = ()> {
+    move || {
+        let uname;
+        let mut umood;
 
-fn user_scenario() -> impl Generator<Yield = String, Return = String> {
-    || {
-        yield format!("what is your name?");
-        yield format!("{}, how are you feeling?", "anon");
-        return format!("{}, bye !", "anon");
+        udata.borrow_mut().msg_out = format!("Hi, what is you name ?");
+        yield ();
+
+        uname = udata.borrow().msg_in.clone();
+        udata.borrow_mut().msg_out = format!("{}, how are you feeling ?", uname);
+        yield ();
+
+        'not_ok: loop {
+            umood = udata.borrow().msg_in.clone();
+            if umood.to_lowercase() == "ok" { break 'not_ok; }
+            udata.borrow_mut().msg_out = format!("{}, think carefully, maybe you're ok ?", uname);
+            yield ();
+
+            umood = udata.borrow().msg_in.clone();
+            if umood.to_lowercase() == "ok" { break 'not_ok; }
+            udata.borrow_mut().msg_out = format!("{}, millions of people are starving, maybe you're ok ?", uname);
+            yield ();
+        }
+
+        udata.borrow_mut().msg_out = format!("{}, good bye !", uname);
+        return ();
     }
 }
 
@@ -92,17 +115,17 @@ fn main() {
 
         let mut udata = read_udata(&mut stream);
         let mut sid = udata.sid.clone();
-        let mut session;
-        let mut deleted_session;
+        let session;
 
         if sid == "" { //new session
             sid = rnd.gen::<u64>().to_string();
             udata.sid = sid.clone();
+            let udata_rc = Rc::new(RefCell::new(udata));
             sessions.insert(
                 sid.clone(),
                 UserSession {
-                    udata_cell: RefCell::new(udata),
-                    scenario: Box::pin(user_scenario())
+                    udata: udata_rc.clone(),
+                    scenario: Box::pin(create_user_scenario(udata_rc)),
                 }
             );
             session = sessions.get_mut(&sid).unwrap();
@@ -111,7 +134,7 @@ fn main() {
             match sessions.get_mut(&sid) {
                 Some(s) => {
                     session = s;
-                    session.udata_cell.replace(udata);
+                    session.udata.replace(udata);
                 }
                 None => {
                     println!("unvalid sid: {}", &sid);
@@ -120,19 +143,16 @@ fn main() {
             }
         }
 
-        match session.scenario.as_mut().resume() {
-            GeneratorState::Yielded(m) => {
-                session.udata_cell.borrow_mut().msg_out = m;
-            }
-            GeneratorState::Complete(m) => {
-                deleted_session = sessions.remove(&sid).unwrap();
-                session = &mut deleted_session;
-                session.udata_cell.borrow_mut().msg_out = m;
-                session.udata_cell.borrow_mut().script = "document.getElementById('form').style.display = 'none'".to_string();
+        let udata = match session.scenario.as_mut().resume() {
+            GeneratorState::Yielded(_) => session.udata.borrow().clone(),
+            GeneratorState::Complete(_) => {
+                let mut ud = sessions.remove(&sid).unwrap().udata.borrow().clone();
+                ud.script = format!("document.getElementById('form').style.display = 'none'");
+                ud
             }
         };
 
-        write_udata(&session.udata_cell.borrow(), &mut stream);
+        write_udata(&udata, &mut stream);
     }
 }
 

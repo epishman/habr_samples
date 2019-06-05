@@ -143,7 +143,7 @@ fn main() {
             }
         }
 
-        let udata = match session.scenario.as_mut().resume() {
+        udata = match session.scenario.as_mut().resume() {
             GeneratorState::Yielded(_) => session.udata.borrow().clone(),
             GeneratorState::Complete(_) => {
                 let mut ud = sessions.remove(&sid).unwrap().udata.borrow().clone();

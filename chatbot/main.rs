@@ -15,7 +15,7 @@ use std::{
     rc::Rc,
 };
 
-const URL: &str = "127.0.0.1:8080";
+const URL: &str = "127.0.0.1:7070";
 
 const HTML: &str = r#"
     <!DOCTYPE html>
@@ -91,21 +91,8 @@ fn main() {
         Err(e) => panic!("Unable to bind at {}\n{}", URL, e),
     };
 
+    std::thread::spawn(|| open_browser());
     println!("OS: {}\nURL: http://{}", OS, URL);
-    match OS {
-        "linux" => {
-            Command::new("xdg-open")
-                .arg("http://".to_string() + URL)
-                .output().expect("Unable to open browser");
-        }
-        "windows" => {
-            Command::new("rundll32")
-                .arg("url.dll,FileProtocolHandler")
-                .arg("http://".to_string() + URL)
-                .output().expect("Unable to open browser");
-        }
-        _ => {}
-    }
 
     let mut sessions: UserSessions = HashMap::new();
     let mut rnd = rand::thread_rng();
@@ -185,4 +172,23 @@ fn write_udata(udata: &UserData, stream: &mut TcpStream) {
 
     stream.write(resp.as_bytes()).unwrap();
     stream.flush().unwrap();
+}
+
+
+fn open_browser() {
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    match OS {
+        "linux" => {
+            Command::new("xdg-open")
+                .arg("http://".to_string() + URL)
+                .output().expect("Unable to open browser");
+        }
+        "windows" => {
+            Command::new("rundll32")
+                .arg("url.dll,FileProtocolHandler")
+                .arg("http://".to_string() + URL)
+                .output().expect("Unable to open browser");
+        }
+        _ => {}
+    }
 }

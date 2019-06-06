@@ -55,7 +55,7 @@ struct UserSession {
 
 type UserSessions = HashMap<String, UserSession>;
 
-fn create_user_scenario(udata: UserDataCell) -> impl Generator<Yield = (), Return = ()> {
+fn create_scenario(udata: UserDataCell) -> impl Generator<Yield = (), Return = ()> {
     move || {
         let uname;
         let mut umood;
@@ -113,19 +113,19 @@ fn main() {
     for stream in listener.incoming() {
         let mut stream = stream.unwrap();
 
-        let mut udata = read_udata(&mut stream);
+        let mut udata: UserData = read_udata(&mut stream);
         let mut sid = udata.sid.clone();
         let session;
 
         if sid == "" { //new session
             sid = rnd.gen::<u64>().to_string();
             udata.sid = sid.clone();
-            let udata_rc = Rc::new(RefCell::new(udata));
+            let udata_cell = Rc::new(RefCell::new(udata));
             sessions.insert(
                 sid.clone(),
                 UserSession {
-                    udata: udata_rc.clone(),
-                    scenario: Box::pin(create_user_scenario(udata_rc)),
+                    udata: udata_cell.clone(),
+                    scenario: Box::pin(create_scenario(udata_cell)),
                 }
             );
             session = sessions.get_mut(&sid).unwrap();
